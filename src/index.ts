@@ -5,7 +5,7 @@ import {
   updateSessionState,
   clearSessionState,
 } from './store.js'
-import { prepareInjection } from './injector.js'
+import { detectInterruption, buildInterruptionContext } from './detector.js'
 
 export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plugin => {
   return async ({ client }) => {
@@ -15,61 +15,41 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
       console.log('[interrupt] Plugin loaded with config:', config)
     }
 
-    return {
-      event: async ({ event }) => {
-        const sessionId = (event as any).session_id
+    // Holds the pending correction context between chat.message and
+    // experimental.chat.system.transform for the same turn
+    let pendingCorrection: { sessionId: string; userText: string } | null = null
 
-        if (event.type === 'session.created' && sessionId) {
+    return {
+      // ─── HOOK 1: session lifecycle ────────────────────────────────────
+      event: async ({ event }) => {
+        const evt = event as any
+        const sessionId = evt.properties?.info?.id
+
+        if (evt.type === 'session.created' && sessionId) {
           getSessionState(sessionId)
           if (config.debug) {
             console.log(`[interrupt] Session created: ${sessionId}`)
           }
         }
 
-        if (event.type === 'session.deleted' && sessionId) {
+        if (evt.type === 'session.deleted' && sessionId) {
           clearSessionState(sessionId)
         }
       },
 
-      'chat.params': async (input, output) => {
+      // ─── HOOK 2: message tracking ─────────────────────────────────────
+      // Fires after each user or assistant message is added
+      'chat.message': async (input, output) => {
         const sessionId = input.sessionID
         if (!sessionId) return
 
-        const sessionState = getSessionState(sessionId)
-        const userMessage = extractUserMessage(input)
+        const msg = output.message as any
+        const role = msg.role
+        const parts = output.parts
 
-        if (!userMessage) return
-
-        const currentSystem = output.system || ''
-        const { systemPrompt, result } = prepareInjection(
-          userMessage,
-          currentSystem,
-          sessionState,
-          config
-        )
-
-        if (result.injected) {
-          output.system = systemPrompt
-
-          if (config.debug) {
-            console.log(`[interrupt] Injected context (${result.reason}):`)
-            console.log(result.context)
-          }
-
-          updateSessionState(sessionId, {
-            wasInterrupted: false,
-            partialContentAtInterrupt: '',
-            awaitingCorrection: false,
-          })
-        }
-      },
-
-      'chat.message': async (input, output) => {
-        const sessionId = (input as any).sessionID || (output as any).sessionID
-        if (!sessionId) return
-
-        if (output.role === 'assistant') {
-          const content = extractAssistantContent(output)
+        // Track assistant responses
+        if (role === 'assistant') {
+          const content = extractText(parts)
           updateSessionState(sessionId, {
             lastAssistantContent: content,
             lastAssistantTimestamp: Date.now(),
@@ -80,36 +60,68 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
           if (config.debug) {
             console.log(`[interrupt] Tracked assistant response (${content.length} chars)`)
           }
+          return
         }
 
-        if (output.role === 'user') {
+        // Track user messages — detect interruptions
+        if (role === 'user') {
           const state = getSessionState(sessionId)
-          const content = extractUserContent(output)
-          const timeSince = Date.now() - state.lastAssistantTimestamp
+          const userText = extractText(parts)
 
-          if (
-            config.voiceMode !== 'disabled' &&
-            timeSince < 2000 &&
-            state.lastAssistantContent.length > config.minResponseLength
-          ) {
+          const signal = detectInterruption(userText, state, config)
+
+          if (signal.isInterruption) {
+            // Build the context but delay injection to the system.transform hook
+            pendingCorrection = { sessionId, userText }
+
             updateSessionState(sessionId, {
-              wasInterrupted: true,
-              partialContentAtInterrupt: state.lastAssistantContent,
-              awaitingCorrection: true,
+              wasInterrupted: false,
+              partialContentAtInterrupt: '',
+              awaitingCorrection: false,
             })
 
             if (config.debug) {
-              console.log(`[interrupt] Voice interruption detected (${timeSince}ms gap)`)
+              console.log(`[interrupt] Correction detected (${signal.reason}) — will inject context`)
             }
+          } else {
+            pendingCorrection = null
           }
         }
       },
 
+      // ─── HOOK 3: system prompt injection ──────────────────────────────
+      // Fires before the model processes the turn — inject context here
+      'experimental.chat.system.transform': async (input, output) => {
+        if (!pendingCorrection) return
+
+        const state = getSessionState(pendingCorrection.sessionId)
+        const signal = detectInterruption(pendingCorrection.userText, state, config)
+
+        if (!signal.isInterruption) {
+          pendingCorrection = null
+          return
+        }
+
+        const context = buildInterruptionContext(state, pendingCorrection.userText, signal)
+        if (!output.system.includes(context)) {
+          output.system.push(context)
+        }
+
+        if (config.debug) {
+          console.log('[interrupt] Injected context into system prompt:')
+          console.log(context)
+        }
+
+        pendingCorrection = null
+      },
+
+      // ─── HOOK 4: tool abort detection ─────────────────────────────────
+      // Detect Ctrl+C interruptions
       'tool.execute.before': async (input, output) => {
-        const sessionId = (input as any).sessionID
+        const sessionId = input.sessionID
         if (!sessionId) return
 
-        const toolName = (input as any).tool?.name || ''
+        const toolName = input.tool
         const isAbort = toolName === 'abort' ||
           toolName === 'cancel' ||
           (input as any).aborted === true
@@ -126,7 +138,7 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
           })
 
           if (config.debug) {
-            console.log(`[interrupt] Ctrl+C detected — captured partial response`)
+            console.log('[interrupt] Ctrl+C detected — captured partial response')
             console.log(`[interrupt] Partial content: "${partialContent.slice(0, 100)}..."`)
           }
         }
@@ -135,43 +147,16 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
   }
 }
 
-function extractUserMessage(input: any): string {
+function extractText(parts: any[]): string {
   try {
-    const messages = input.messages || []
-    const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')
-    if (!lastUser) return ''
-    const content = lastUser.content
-    if (typeof content === 'string') return content
-    if (Array.isArray(content)) {
-      return content
-        .filter((c: any) => c.type === 'text')
-        .map((c: any) => c.text)
-        .join(' ')
-    }
-    return ''
+    if (!Array.isArray(parts)) return ''
+    return parts
+      .filter((p: any) => p.type === 'text')
+      .map((p: any) => p.text || '')
+      .join(' ')
   } catch {
     return ''
   }
-}
-
-function extractAssistantContent(output: any): string {
-  try {
-    const content = output.content
-    if (typeof content === 'string') return content
-    if (Array.isArray(content)) {
-      return content
-        .filter((c: any) => c.type === 'text')
-        .map((c: any) => c.text)
-        .join(' ')
-    }
-    return ''
-  } catch {
-    return ''
-  }
-}
-
-function extractUserContent(output: any): string {
-  return extractAssistantContent(output)
 }
 
 export default InterruptPlugin()
