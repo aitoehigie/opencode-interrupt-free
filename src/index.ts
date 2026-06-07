@@ -1,5 +1,5 @@
 import type { Plugin } from '@opencode-ai/plugin'
-import { resolveConfig, type InterruptConfig } from './config.js'
+import { resolveConfig, SENSITIVITY_PRESETS, type InterruptConfig } from './config.js'
 import {
   getSessionState,
   updateSessionState,
@@ -15,9 +15,91 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
       console.log('[interrupt] Plugin loaded with config:', config)
     }
 
+    function handleSlashCommand(
+      text: string,
+      cfg: InterruptConfig,
+      respond: (msg: string) => void
+    ): boolean {
+      const trimmed = text.trim()
+      if (!trimmed.startsWith('/interrupt')) return false
+
+      const args = trimmed.slice('/interrupt'.length).trim()
+      const cmd = args.split(/\s+/)[0]?.toLowerCase() || ''
+      const val = args.slice(cmd.length).trim()
+
+      switch (cmd) {
+        case '': {
+          respond(
+            `Sensitivity: ${cfg.sensitivity} | Timing: ${cfg.timingWindowMs}ms | ` +
+            `Max correction: ${cfg.maxCorrectionLength} chars | ` +
+            `Min response: ${cfg.minResponseLength} chars | ` +
+            `Voice mode: ${cfg.voiceMode} | Debug: ${cfg.debug} | ` +
+            `Triggers: ${cfg.correctionTriggers.join(', ') || '(defaults)'}`
+          )
+          return true
+        }
+        case 'sensitivity': {
+          const valid = ['low', 'medium', 'high']
+          if (val && valid.includes(val)) {
+            cfg.sensitivity = val as 'low' | 'medium' | 'high'
+            const p = SENSITIVITY_PRESETS[cfg.sensitivity]
+            cfg.timingWindowMs = p.timingWindowMs
+            cfg.maxCorrectionLength = p.maxCorrectionLength
+            cfg.minResponseLength = p.minResponseLength
+            respond(`Sensitivity set to ${val}. Timing: ${p.timingWindowMs}ms, max correction: ${p.maxCorrectionLength} chars.`)
+          } else {
+            respond(`Sensitivity: ${cfg.sensitivity}. Valid values: ${valid.join(', ')}`)
+          }
+          return true
+        }
+        case 'debug': {
+          cfg.debug = val === 'on' || val === 'true'
+          respond(`Debug ${cfg.debug ? 'enabled' : 'disabled'}`)
+          return true
+        }
+        case 'triggers': {
+          if (val) {
+            cfg.correctionTriggers = val.split(',').map(t => t.trim()).filter(Boolean)
+            respond(`Trigger words set: ${cfg.correctionTriggers.join(', ')}`)
+          } else {
+            respond(`Current triggers: ${cfg.correctionTriggers.join(', ') || '(defaults: wait, actually, no, hold on, scratch, nevermind, instead)'}`)
+          }
+          return true
+        }
+        case 'timing': {
+          const ms = parseInt(val)
+          if (!isNaN(ms) && ms >= 1000 && ms <= 10000) {
+            cfg.timingWindowMs = ms
+            respond(`Timing window set to ${ms}ms`)
+          } else {
+            respond(`Timing window must be 1000–10000ms (current: ${cfg.timingWindowMs}ms)`)
+          }
+          return true
+        }
+        case 'voice': {
+          const valid = ['auto', 'enabled', 'disabled']
+          if (val && valid.includes(val)) {
+            cfg.voiceMode = val as 'auto' | 'enabled' | 'disabled'
+            respond(`Voice mode set to ${val}`)
+          } else {
+            respond(`Voice mode: ${cfg.voiceMode}. Valid values: ${valid.join(', ')}`)
+          }
+          return true
+        }
+        default:
+          respond(`Unknown: /interrupt ${cmd}. Commands: sensitivity, debug, triggers, timing, voice`)
+          return true
+      }
+    }
+
     // Holds the pending correction context between chat.message and
     // experimental.chat.system.transform for the same turn
     let pendingCorrection: { sessionId: string; context: string } | null = null
+
+    function injectResponse(text: string) {
+      pendingCorrection = { sessionId: '', context: text }
+      if (config.debug) console.log(`[interrupt] /interrupt: ${text}`)
+    }
 
     return {
       // ─── HOOK 1: session lifecycle ────────────────────────────────────
@@ -67,6 +149,13 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
         if (role === 'user') {
           const state = getSessionState(sessionId)
           const userText = extractText(parts)
+
+          // Check for /interrupt slash command first
+          if (handleSlashCommand(userText, config, injectResponse)) {
+            pendingCorrection!.sessionId = sessionId
+            return
+          }
+
           const timeSinceResponse = Date.now() - state.lastAssistantTimestamp
 
           // Voice mode heuristic: spoken input arriving very shortly after
