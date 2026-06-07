@@ -17,7 +17,7 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
 
     // Holds the pending correction context between chat.message and
     // experimental.chat.system.transform for the same turn
-    let pendingCorrection: { sessionId: string; userText: string } | null = null
+    let pendingCorrection: { sessionId: string; context: string } | null = null
 
     return {
       // ─── HOOK 1: session lifecycle ────────────────────────────────────
@@ -67,12 +67,34 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
         if (role === 'user') {
           const state = getSessionState(sessionId)
           const userText = extractText(parts)
+          const timeSinceResponse = Date.now() - state.lastAssistantTimestamp
+
+          // Voice mode heuristic: spoken input arriving very shortly after
+          // a long response is almost certainly an interruption — even
+          // without a trigger word. This handles voice-mode timing gaps
+          // where speech-opencode delivers the transcript quickly.
+          if (
+            config.voiceMode !== 'disabled' &&
+            timeSinceResponse < 2000 &&
+            state.lastAssistantContent.length >= config.minResponseLength
+          ) {
+            updateSessionState(sessionId, {
+              wasInterrupted: true,
+              partialContentAtInterrupt: state.lastAssistantContent,
+              interruptTimestamp: Date.now(),
+              awaitingCorrection: true,
+            })
+
+            if (config.debug) {
+              console.log(`[interrupt] Voice interruption (${timeSinceResponse}ms gap) — flagged as interrupted`)
+            }
+          }
 
           const signal = detectInterruption(userText, state, config)
 
           if (signal.isInterruption) {
-            // Build the context but delay injection to the system.transform hook
-            pendingCorrection = { sessionId, userText }
+            const context = buildInterruptionContext(state, userText, signal)
+            pendingCorrection = { sessionId, context }
 
             updateSessionState(sessionId, {
               wasInterrupted: false,
@@ -94,15 +116,7 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
       'experimental.chat.system.transform': async (input, output) => {
         if (!pendingCorrection) return
 
-        const state = getSessionState(pendingCorrection.sessionId)
-        const signal = detectInterruption(pendingCorrection.userText, state, config)
-
-        if (!signal.isInterruption) {
-          pendingCorrection = null
-          return
-        }
-
-        const context = buildInterruptionContext(state, pendingCorrection.userText, signal)
+        const context = pendingCorrection.context
         if (!output.system.includes(context)) {
           output.system.push(context)
         }
