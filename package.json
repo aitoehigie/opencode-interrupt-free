@@ -1,0 +1,36 @@
+{
+  "name": "opencode-plugin-interrupt",
+  "version": "0.1.0",
+  "description": "Makes OpenCode interruption-aware. Ctrl+C mid-response becomes a correction signal, not lost context.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "tsc"
+  },
+  "peerDependencies": {
+    "speech-opencode": ">=1.0.0",
+    "opencode-voice": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "speech-opencode": { "optional": true },
+    "opencode-voice": { "optional": true }
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "interruption",
+    "voice",
+    "ai",
+    "cli"
+  ],
+  "license": "MIT"
+}
