@@ -133,15 +133,21 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
       },
 
       // ─── HOOK 4: tool abort detection ─────────────────────────────────
-      // Detect Ctrl+C interruptions
+      // Detect interruptions (Escape, Ctrl+G, Ctrl+C, etc.)
       'tool.execute.before': async (input, output) => {
         const sessionId = input.sessionID
         if (!sessionId) return
 
         const toolName = input.tool
+        const aborted = (input as any).aborted
+
+        if (config.debug) {
+          console.log(`[interrupt] tool.execute.before — tool="${toolName}", sessionID="${sessionId}", aborted=${aborted}`)
+        }
+
         const isAbort = toolName === 'abort' ||
           toolName === 'cancel' ||
-          (input as any).aborted === true
+          aborted === true
 
         if (isAbort) {
           const state = getSessionState(sessionId)
@@ -155,8 +161,7 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
           })
 
           if (config.debug) {
-            console.log('[interrupt] Ctrl+C detected — captured partial response')
-            console.log(`[interrupt] Partial content: "${partialContent.slice(0, 100)}..."`)
+            console.log(`[interrupt] Interrupt detected via tool="${toolName}" — captured ${partialContent.length} chars`)
           }
         }
       },
