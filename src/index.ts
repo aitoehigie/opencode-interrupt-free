@@ -1,5 +1,5 @@
 import type { Plugin } from '@opencode-ai/plugin'
-import { resolveConfig, SENSITIVITY_PRESETS, type InterruptConfig } from './config.js'
+import { resolveConfig, type InterruptConfig } from './config.js'
 import {
   getSessionState,
   updateSessionState,
@@ -13,98 +13,6 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
 
     if (config.debug) {
       console.log('[interrupt] Plugin loaded with config:', config)
-    }
-
-    function handleSlashCommand(
-      text: string,
-      cfg: InterruptConfig,
-      respond: (msg: string) => void
-    ): boolean {
-      const trimmed = text.trim()
-      if (!trimmed.startsWith('/interrupt')) return false
-
-      const args = trimmed.slice('/interrupt'.length).trim()
-      const cmd = args.split(/\s+/)[0]?.toLowerCase() || ''
-      const val = args.slice(cmd.length).trim()
-
-      switch (cmd) {
-        case '': {
-          respond(
-            `Sensitivity: ${cfg.sensitivity} | Timing: ${cfg.timingWindowMs}ms | ` +
-            `Max correction: ${cfg.maxCorrectionLength} chars | ` +
-            `Min response: ${cfg.minResponseLength} chars | ` +
-            `Voice mode: ${cfg.voiceMode} | Debug: ${cfg.debug} | ` +
-            `Triggers: ${cfg.correctionTriggers.join(', ') || '(defaults)'}`
-          )
-          return true
-        }
-        case 'sensitivity': {
-          const valid = ['low', 'medium', 'high']
-          if (val && valid.includes(val)) {
-            cfg.sensitivity = val as 'low' | 'medium' | 'high'
-            const p = SENSITIVITY_PRESETS[cfg.sensitivity]
-            cfg.timingWindowMs = p.timingWindowMs
-            cfg.maxCorrectionLength = p.maxCorrectionLength
-            cfg.minResponseLength = p.minResponseLength
-            respond(`Sensitivity set to ${val}. Timing: ${p.timingWindowMs}ms, max correction: ${p.maxCorrectionLength} chars.`)
-          } else {
-            respond(`Sensitivity: ${cfg.sensitivity}. Valid values: ${valid.join(', ')}`)
-          }
-          return true
-        }
-        case 'debug': {
-          cfg.debug = val === 'on' || val === 'true'
-          respond(`Debug ${cfg.debug ? 'enabled' : 'disabled'}`)
-          return true
-        }
-        case 'triggers': {
-          if (val) {
-            cfg.correctionTriggers = val.split(',').map(t => t.trim()).filter(Boolean)
-            respond(`Trigger words set: ${cfg.correctionTriggers.join(', ')}`)
-          } else {
-            respond(`Current triggers: ${cfg.correctionTriggers.join(', ') || '(defaults: wait, actually, no, hold on, scratch, nevermind, instead)'}`)
-          }
-          return true
-        }
-        case 'timing': {
-          const ms = parseInt(val)
-          if (!isNaN(ms) && ms >= 1000 && ms <= 10000) {
-            cfg.timingWindowMs = ms
-            respond(`Timing window set to ${ms}ms`)
-          } else {
-            respond(`Timing window must be 1000–10000ms (current: ${cfg.timingWindowMs}ms)`)
-          }
-          return true
-        }
-        case 'voice': {
-          const valid = ['auto', 'enabled', 'disabled']
-          if (val && valid.includes(val)) {
-            cfg.voiceMode = val as 'auto' | 'enabled' | 'disabled'
-            respond(`Voice mode set to ${val}`)
-          } else {
-            respond(`Voice mode: ${cfg.voiceMode}. Valid values: ${valid.join(', ')}`)
-          }
-          return true
-        }
-        case 'help':
-          respond([
-            '',
-            'Interrupt Plugin — Slash Commands',
-            '',
-            '  /interrupt              Show current configuration',
-            '  /interrupt help         Show this help',
-            '  /interrupt sensitivity  Set sensitivity (low, medium, high)',
-            '  /interrupt debug        Toggle debug logging (on, off)',
-            '  /interrupt triggers     Set correction trigger words',
-            '  /interrupt timing       Set timing window in ms (1000-10000)',
-            '  /interrupt voice        Set voice mode (auto, enabled, disabled)',
-            '',
-          ].join('\n'))
-          return true
-        default:
-          respond(`Unknown: /interrupt ${cmd}. Type /interrupt help for available commands.`)
-          return true
-      }
     }
 
     // Holds the pending correction context between chat.message and
@@ -280,15 +188,6 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
         }
       },
 
-      // ─── HOOK 5: slash commands ────────────────────────────────────────
-      'command.execute.before': async (input, output) => {
-        if (input.command !== 'interrupt' && input.command !== '/interrupt') return
-        const text = '/interrupt ' + (input.arguments || '')
-        handleSlashCommand(text.trim(), config, (msg) => {
-          ;(output as any).parts = [{ type: 'text', text: msg }]
-          if (config.debug) console.log(`[interrupt] /interrupt: ${msg}`)
-        })
-      },
     }
   }
 }
