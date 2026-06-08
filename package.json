@@ -1,6 +1,6 @@
 {
   "name": "opencode-plugin-interrupt",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Makes OpenCode interruption-aware. Ctrl+C mid-response becomes a correction signal, not lost context.",
   "type": "module",
   "main": "./dist/index.js",
