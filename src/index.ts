@@ -25,7 +25,11 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
       // ─── HOOK 1: session lifecycle ────────────────────────────────────
       event: async ({ event }) => {
         const evt = event as any
-        const sessionId = evt.properties?.info?.id
+        const sessionId = evt.properties?.info?.id || (evt as any).session_id
+
+        if (config.debug && evt.type !== 'ping') {
+          console.log(`[interrupt] event: ${evt.type}${sessionId ? ` session="${sessionId}"` : ''}`)
+        }
 
         if (evt.type === 'session.created' && sessionId) {
           activeSessionId = sessionId
@@ -37,6 +41,10 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
 
         if (evt.type === 'session.deleted' && sessionId) {
           clearSessionState(sessionId)
+        }
+
+        if (config.debug && (evt.type as string).includes('interrupt')) {
+          console.log(`[interrupt] Interrupt event:`, JSON.stringify(evt))
         }
       },
 
