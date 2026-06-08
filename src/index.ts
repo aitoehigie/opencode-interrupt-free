@@ -189,16 +189,6 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
         if (role === 'user') {
           const state = getSessionState(sessionId)
           const userText = extractText(parts)
-
-          // Check for /interrupt slash command first
-          if (userText.startsWith('/interrupt')) {
-            handleSlashCommand(userText, config, (msg) => {
-              ;(output as any).parts = [{ type: 'text', text: msg }]
-              if (config.debug) console.log(`[interrupt] /interrupt: ${msg}`)
-            })
-            return
-          }
-
           const timeSinceResponse = Date.now() - state.lastAssistantTimestamp
 
           // Voice mode heuristic: spoken input arriving very shortly after
@@ -288,6 +278,16 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
             console.log(`[interrupt] Partial content: "${partialContent.slice(0, 100)}..."`)
           }
         }
+      },
+
+      // ─── HOOK 5: slash commands ────────────────────────────────────────
+      'command.execute.before': async (input, output) => {
+        if (input.command !== 'interrupt' && input.command !== '/interrupt') return
+        const text = '/interrupt ' + (input.arguments || '')
+        handleSlashCommand(text.trim(), config, (msg) => {
+          ;(output as any).parts = [{ type: 'text', text: msg }]
+          if (config.debug) console.log(`[interrupt] /interrupt: ${msg}`)
+        })
       },
     }
   }
