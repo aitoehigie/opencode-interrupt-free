@@ -86,8 +86,23 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
           }
           return true
         }
+        case 'help':
+          respond([
+            '',
+            'Interrupt Plugin — Slash Commands',
+            '',
+            '  /interrupt              Show current configuration',
+            '  /interrupt help         Show this help',
+            '  /interrupt sensitivity  Set sensitivity (low, medium, high)',
+            '  /interrupt debug        Toggle debug logging (on, off)',
+            '  /interrupt triggers     Set correction trigger words',
+            '  /interrupt timing       Set timing window in ms (1000-10000)',
+            '  /interrupt voice        Set voice mode (auto, enabled, disabled)',
+            '',
+          ].join('\n'))
+          return true
         default:
-          respond(`Unknown: /interrupt ${cmd}. Commands: sensitivity, debug, triggers, timing, voice`)
+          respond(`Unknown: /interrupt ${cmd}. Type /interrupt help for available commands.`)
           return true
       }
     }
@@ -95,11 +110,6 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
     // Holds the pending correction context between chat.message and
     // experimental.chat.system.transform for the same turn
     let pendingCorrection: { sessionId: string; context: string } | null = null
-
-    function injectResponse(text: string) {
-      pendingCorrection = { sessionId: '', context: text }
-      if (config.debug) console.log(`[interrupt] /interrupt: ${text}`)
-    }
 
     let activeSessionId: string | null = null
 
@@ -181,8 +191,11 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
           const userText = extractText(parts)
 
           // Check for /interrupt slash command first
-          if (handleSlashCommand(userText, config, injectResponse)) {
-            pendingCorrection!.sessionId = sessionId
+          if (userText.startsWith('/interrupt')) {
+            handleSlashCommand(userText, config, (msg) => {
+              ;(output as any).parts = [{ type: 'text', text: msg }]
+              if (config.debug) console.log(`[interrupt] /interrupt: ${msg}`)
+            })
             return
           }
 
