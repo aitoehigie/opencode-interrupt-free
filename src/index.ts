@@ -101,6 +101,35 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
       if (config.debug) console.log(`[interrupt] /interrupt: ${text}`)
     }
 
+    let activeSessionId: string | null = null
+
+    // SIGINT: first press = abort, second press within 2s = exit
+    let lastSIGINT = 0
+    let sigintRegistered = false
+    if (!sigintRegistered) {
+      sigintRegistered = true
+      process.on('SIGINT', () => {
+        const now = Date.now()
+        if (lastSIGINT && now - lastSIGINT < 2000) {
+          if (config.debug) console.log('[interrupt] SIGINT — double tap, exiting')
+          process.exit(0)
+        }
+        lastSIGINT = now
+        if (activeSessionId) {
+          const state = getSessionState(activeSessionId)
+          updateSessionState(activeSessionId, {
+            wasInterrupted: true,
+            partialContentAtInterrupt: state.lastAssistantContent,
+            interruptTimestamp: now,
+            awaitingCorrection: true,
+          })
+          if (config.debug) {
+            console.log('[interrupt] SIGINT — abort (press again within 2s to exit)')
+          }
+        }
+      })
+    }
+
     return {
       // ─── HOOK 1: session lifecycle ────────────────────────────────────
       event: async ({ event }) => {
@@ -108,6 +137,7 @@ export const InterruptPlugin = (userConfig: Partial<InterruptConfig> = {}): Plug
         const sessionId = evt.properties?.info?.id
 
         if (evt.type === 'session.created' && sessionId) {
+          activeSessionId = sessionId
           getSessionState(sessionId)
           if (config.debug) {
             console.log(`[interrupt] Session created: ${sessionId}`)
